@@ -1,0 +1,23 @@
+#' Spawning probability by age for San Francisco Estuary-based White Sturgeon.
+#'
+#' @description A dataset for White Sturgeon (\emph{Acipenser transmontanus})
+#'    with 20 ages (0-19) and corresponding spawning probability
+#'    with associated error.
+#'
+#' @format A data frame with 20 rows and 3 variables: \describe{
+#'    \item{age}{numeric age from 0-19}
+#'    \item{prob}{probability of spawning at each age}
+#'    \item{se}{error associated with prob}
+#' }
+#'
+#' @details Based on generalized linear model using data from Chapman 1989.
+#'    Model used \code{binomial(link = "logit")} with probability of
+#'    maturity ~ length.
+#'
+#' @references Chapman, F.  1989.  Sexual maturation and reproductive parameters
+#'    of wild and domestic stocks of White Sturgeon, Acipenser transmontanus.
+#'    Doctoral dissertation. University of California, Davis, California.
+#'
+#' @source Model development input data (CDFW; Univ. of Idaho).
+#' @name prob_spawn
+NULL

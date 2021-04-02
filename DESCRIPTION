@@ -1,0 +1,25 @@
+Package: spopmodel
+Type: Package
+Title: Methods for and Application of Fish Population Dynamics Model
+Version: 0.0.0.9000
+Date: 2018-08-16
+Depends: R (>= 3.5.0)
+Imports:
+    msm (>= 1.6.6),
+    popbio (>= 2.4.4),
+    reshape2 (>= 1.4.3)
+Authors@R: person("Jason", "DuBois", email = "jason.dubois@wildlife.ca.gov",
+    role = c("aut", "cre"))
+Maintainer: Jason DuBois <jason.dubois@wildlife.ca.gov>
+Description: Provides functions and methods to apply population
+    dynamics model to fishery datasets. Uses mark-recapture, age-
+    length, and other data to model population tracjectories over time.
+License: GPL-2
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.0.1
+Suggests:
+    testthat,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr

@@ -1,0 +1,296 @@
+---
+title: "Model Simulations"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Model Simulations}
+  %\VignetteEngine{knitr::rmarkdown}
+  \usepackage[utf8]{inputenc}
+---
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+```
+
+```{r libraries}
+
+library(spopmodel)
+
+```
+
+## Background
+
+## Data
+
+We will use three datasets native to `spopmodel`: `age_dist`; `prob_spawn`; and `number_eggs`'. Below we show a snippet of each. (If you wish, in your R console, run `library(spopmodel)`, and then view each by typing dataset name and pressing <<return>>.)
+
+```{r data-str}
+
+str(age_dist)
+cat("\n")
+str(prob_spawn)
+cat("\n")
+str(number_eggs)
+
+```
+
+Note that all three datasets have an `age` field, and that (you may verify if you wish) age ranges from 0 to 19. We need one more dataset (survival probability), which will discuss below.
+
+### Survival Probability
+
+We have available to us (i.e., native to `spopmodel`) dataframe `prob_survival`. However, this dataset only reflects one level of exploitation ($\mu$; ~0.13), and for this demo we want a range of say 0 to 0.30. To do this, we use `SurvivalProb()`. The resulting variable (`prob_surv`) is a list with 31 elements, one for each level of $\mu$.
+
+`SurvivalProb()` requires age-specific probability survival, along with some measure of error. Here we use data from `prob_survival` (see `help(prob_survival)`). We use only the first 4 rates (`prob`) from this dataset, as ages 0-2 were culled from literature and the fourth value (`r prob_survival[[4, "prob"]]`) assumes no fishing mortality. This value is then used for all remaining age levels, and fishing mortality is incorporated accordingly. We use default values for `estS` and `estMu` (not displayed below but explained in `help("SurvivalProb")`. *Note*: `agesMu` reflect ages susceptible to harvest (obtained from `FitVBGM()` and related slot-limit length to age).
+
+```{r prob-surv}
+
+# set vector of mu from 0 to 0.30
+mus <- seq(from = 0, to = 0.30, by = 0.01)
+
+prob_surv <- SurvivalProb(
+  ages = prob_survival[["age"]],
+  sRate = prob_survival[1:4, "prob"],
+  sRateErr = prob_survival[1:4, "se"],
+  mu = mus,
+  agesMu = 10:15
+)
+
+```
+
+## Simulations
+
+Now that we have our starting data, let's run some simulations.
+
+```{r iters}
+
+iters <- 1000
+
+```
+
+For simplicity, we've set the number of iterations to `r iters`. In reality and for improved accuracy, you'd want to run upwards of 5K to 10K or more.
+
+Using `prob_spawn` we'll run simulations for spawning probability. We set the seed arbitrarily to 1234.
+
+```{r sims-prob_spawn}
+
+sims_prob_spawn <- Simulations(
+  data = prob_spawn,
+  prob = prob,
+  std = se,
+  iters = iters,
+  seed = 1234,
+  type = "spawning"
+)
+
+str(sims_prob_spawn)
+
+```
+
+Next --- and like with did with `prob_spawn`, we'll run simulations using `number_eggs`.
+
+```{r sims-num_eggs}
+
+sims_num_eggs <- Simulations(
+  data = number_eggs,
+  prob = count,
+  std = se,
+  iters = iters,
+  seed = 1234,
+  type = "numeggs"
+)
+
+str(sims_num_eggs)
+
+```
+
+Simulations for survival probability are a bit more tricky because we must iterate over all items in `prob_surv` (i.e., all levels of mu in `mus`). For this, we use R's `mapply()`. (Note in the `MoreArgs` argument we've had to quote field names. Observe when directly calling `Simulations()` we did not need quotes.) The `recruitment` parameter denotes period (in years) of successful recruitment. We can change accordingly, but for this demonstration we'll keep it at 5. We set `SIMPLIFY = FALSE`, as we want to maintain list datatype.
+
+```{r sims-prob_surv}
+
+sims_prob_surv <-mapply(
+  FUN = Simulations,
+  prob_surv,
+  MoreArgs = list(
+    prob = "Prob",
+    std = "Err",
+    recruitment = 5,
+    iters = iters,
+    # makes a difference setting to NULL
+    # seed = 1234,
+    seed = NULL, 
+    type = "survival"
+  ),
+  SIMPLIFY = FALSE
+)
+
+```
+
+```{r noodling, eval=FALSE, include=FALSE}
+
+# str(sims_prob_surv)
+
+# vapply(sims_prob_surv, FUN = identical, y = sims_prob_surv$mu_0.01, FUN.VALUE = logical(1L))
+# 
+# tail(sims_prob_surv$mu_0.01, n = 10)
+# tail(sims_prob_surv$mu_0.3, n = 10)
+
+```
+
+Next we calculate fecundity simulations using egg count and spawning probability simulations. We assume a 0.5 female:male ratio.
+
+```{r sims-fecund}
+
+sex_ratio <- 0.5
+
+sims_fecund <- sims_num_eggs * sims_prob_spawn * sex_ratio
+
+# str(sims_fecund)
+
+```
+
+Now with all the sims in place, we run population projections for each level of $\mu$. First, we create some helpful variables for use with `lapply()`.
+
+`final_age` gets survival probability of the oldest fish (i.e., age-19) for each level of $\mu$. The model assumes last age does not die. (We hard-code `20` and `2:3` because we know we have 20 age groups (0-19) and columns 2 & 3 are probability ("Prob") and error ("Err"). Ideally, it would be best to generate these numbers programmatically.) `mu_levels` creates a vector of $\mu$ levels given the names of `sim_prob_surv`. We'll use this as our "looping" variable in `lapply()`.
+
+```{r pop-proj_vars}
+
+final_age <- lapply(prob_surv, FUN = "[", 20, 2:3)
+
+# should be TRUE
+# identical(
+#   names(sims_prob_surv),
+#   names(final_age)
+# )
+
+mu_levels <- setNames(
+  object = names(sims_prob_surv),
+  nm = names(sims_prob_surv)
+)
+
+```
+
+Population projections 
+
+Admittingly, there are cleaner ways to perform these next steps. In the future, we may create some functions or methods to handle such processes but for now this will suffice.
+
+For each value in `mu_levels` we need to get population projections. We essentially do this using `popbio::pop.projection()` (`PopProjections()` is basically a convenient wrapper.) `popbio::pop.projection()` requires a projection matrix (Leslie Matrix in our case), an age vector (this is our `freq` field in `age_dist`), and iterations (or `period` as implemented by `PopProjections()`).
+
+Creation of the Leslie Matrix is handled within `PopProjections()`. So we just supply the proper arguments. Recall `sims_prob_surv` and `final_age` are lists each with `n = length(mus)` elements. Thus, the use of `[[x]]` within our `lapply()` loop. 
+
+```{r pop-proj}
+
+pop_proj <- lapply(mu_levels, FUN = function(x) {
+  
+  PopProjections(
+    fSims = sims_fecund,
+    sSims = sims_prob_surv[[x]],
+    mn = final_age[[x]][["Prob"]],
+    sdev = final_age[[x]][["Err"]],
+    ageFreq = age_dist[["freq"]],
+    period = 20
+  )
+  
+})
+
+```
+
+Lambda
+
+...and now what we paid top dollar for: **Lambda** ($\lambda$), the population growth rate. `pop_proj` is a massive list within a list. Within each $\mu$ level exists an even larger list (size is 5 * iters, or in our case 5000). Five (5) is the number of values returned by `popbio::pop.projection()` (see help file for names of return values). We need to extract `pop.changes` (e.g., pop_proj[["mu_0"]]["pop.changes", ], which gets all 1000 `pop.changes` for $\mu$ level 0).
+
+`Lambda()` returns a dataframe. Currently `MuLevel` is set to TBD. So below we use a cheap way of replacing TBD with the appropriate value. In the future, we'll improve `Lambda()` to handle this. Numeric `MuLevel` is important for plotting, the next and final step.
+
+```{r lambda}
+
+lambda_mu <- lapply(mu_levels, FUN = function(x) {
+  
+  mu <- as.numeric(sub(pattern = "mu_", replacement = "", x = x))
+  
+  out <- Lambda(popChanges = pop_proj[[x]]["pop.changes", ])
+  
+  out[["MuLevel"]] <- mu
+  
+  out
+  
+})
+
+lambda_mu <- do.call(what = rbind, args = lambda_mu)
+rownames(lambda_mu) <- NULL
+
+lambda_mu
+
+```
+
+```{r plot-lambda}
+
+# x & y values for drawing polygon as lower & upper bounds
+poly_list <- list(
+  x = c(
+    lambda_mu[["MuLevel"]][1],
+    lambda_mu[["MuLevel"]],
+    rev(lambda_mu[["MuLevel"]][-1])
+  ),
+  y = c(
+    lambda_mu[["QuantLow"]][1],
+    lambda_mu[["QuantUpp"]],
+    rev(lambda_mu[["QuantLow"]][-1])
+  )
+)
+
+# create the plot with appropriate limits
+plot(
+  x = range(lambda_mu[["MuLevel"]]),
+  y = range(lambda_mu[, c("QuantLow", "QuantUpp")]),
+  type = "n",
+  panel.last = abline(h = 1, col = "grey50", lty = 2, lwd = 0.25),
+  panel.first = polygon(poly_list, col = "grey90", border = NA),
+  las = 1,
+  xlab = "Mu",
+  ylab = "Lambda"
+)
+
+# add data (mean lambda over mu)
+lines(
+  x = lambda_mu[["MuLevel"]],
+  y = lambda_mu[["MeanLambda"]],
+  col = "steelblue",
+  lty = 1,
+  lwd = 3
+)
+
+# optional: add current mu
+# adding point might be better but would need to workout accurate y-val
+# points(x = 0.13, y = 0.98, col = "darkorange", pch = 19)
+abline(v = 0.13, col = "darkorange", lty = 2, lwd = 0.5)
+
+# optional: lower & upper bounds as lines
+# lines(
+#   x = c(lambda_mu[["MuLevel"]]),
+#   y = c(lambda_mu[["LBLambda"]]),
+#   col = "blue"
+# )
+# lines(
+#   x = c(lambda_mu[["MuLevel"]]),
+#   y = c(lambda_mu[["UBLambda"]]),
+#   col = "red"
+# )
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

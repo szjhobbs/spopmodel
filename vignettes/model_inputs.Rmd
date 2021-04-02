@@ -1,0 +1,405 @@
+---
+title: "Generate Model Input Data"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Generate Model Input Data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+```
+
+```{r libraries}
+
+library(spopmodel)
+
+```
+
+## Background
+
+A key step in `spopmodel` employs a female-based Leslie Matrix. Thus, this model requires data about survival probability, reproduction (spawning probability & fecundity), and age distribution (frequency). Here we show --- using raw age & length data --- the processes by which we generate model inputs. Ultimately, we use these inputs (or starting data) to run simulations (see vignette of same name) that then "feed" the model.
+
+`spopmodel` was developed to assess San Francisco-estuary based population dynamics. Herein we use the data on which the model was built (i.e., White Sturgeon data collected by the California Department of Fish & Wildlife [CDFW] in collaboration with the US Fish & Wildlife Service and the University of Idaho [the model developers]).
+
+*Note*: about data not exact to that used in thesis
+*Note*: if you already have these data proceed to sims
+*Note*: ??
+
+## Data
+
+For this demonstration, we'll use dataset `trammel_catch`. These data are from the CDFW's [Sturgeon Study](https://www.wildlife.ca.gov/Conservation/Delta/Sturgeon-Study). This particular dataset is from 2014-2016 sampling. It contains age & length data, with `r sum(!is.na(trammel_catch[["Age"]]))` aged fish from `r nrow(trammel_catch)` observations. Age was estimated from fin ray samples collected in the field.
+
+*Note*: Herein we **do not** adjust catch data for gear selectivity. Likely, such an adjustment would increase catch in most of the length bins (and thus ages). A vignette about performing such adjustment is forthcoming.
+
+Let's plot FL ~ Age to get some sense of range and mean-length-at-age. We added some noise (`jitter()`) to variable Age to reduce over-plotting.
+
+```{r plot-raw}
+
+plot(FL ~ jitter(Age), data = trammel_catch, col = "steelblue")
+abline(h = 190, col = "grey70", lty = 2)
+
+```
+
+We arbitrarily set a horizontal line at 190 cm FL and noted we do not have many *aged* fish &ge; 190. If fact, as we see below, the entire dataset only has `r nrow(trammel_catch[trammel_catch[["FL"]] > 190, ])` fish &ge; 190 cm FL. Thus, to ensure no empty bins in our age-length key, we will (somewhat arbitrarily) set age to 19 for "age-less" fish &ge; 190 cm FL.
+
+*Note*: In reality, we may decide to age these large fish if we had the means to do so (i.e., had a fin-ray sample). But for this purpose, age-19 is a pretty good surrogate give aged fish of similar size. We also could manipulate bin size (in length frequency) to see if these fish are binned with any aged fish.
+
+```{r fish-gte190}
+
+bool_gte190 <- trammel_catch[["FL"]] >= 190
+
+trammel_catch[bool_gte190, ]
+
+```
+
+We can replace `NA` with 19 simply using `is.na()` along with our Boolean above. We display the results to verify our change.
+
+```{r age-19}
+
+bool_ageNA <- is.na(trammel_catch[["Age"]])
+
+trammel_catch[bool_gte190 & bool_ageNA, "Age"] <- 19
+
+# verification
+trammel_catch[bool_gte190, ]
+
+```
+
+## Model Inputs
+
+`spopmodel`'s design requires four data inputs: age distribution; spawning probability; egg count; and survival probability. All four must configure to the age range established in age distribution, which should contain young age classes (i.e., ages-0 to ages-2). These datasets are not fed directly to the model but rather are used to run stochastic simulations. The model directly uses these simulations to generate population growth rate ($\lambda$) predictions.
+
+Though not directly a model input, we begin by creating a length frequency distribution. As we'll see in the next section, length frequency if useful for --- among other things --- aging the un-aged portion.   
+
+### Length Frequency
+
+To age the un-aged portion of our data, we have a couple of methods from which to choose. Both methods --- using age-length key or assigning age to each fish --- require length frequency. We use `Frequency()` for such a task, setting bin width to 5 cm. (For White Sturgeon, 5 cm is a good starting bin size, but you may want to experiment with various sizes. Here, we will stick with 5 cm.) As shown below, `Frequency()` output provides a list with nine elements.
+
+```{r len-freq}
+
+len_freq <- Frequency(trammel_catch[["FL"]], binWidth = 5)
+
+str(len_freq)
+
+```
+
+For curiosity, we'll run some descriptive stats on variable FL. We see a range from `r len_freq$xstats()$Min` to `r len_freq$xstats()$Max` cm FL.
+
+```{r len-stats}
+
+len_desc_stats <- len_freq$xstats()
+
+# for display
+unlist(len_desc_stats)
+
+```
+
+We also note from `len_freq` we get breaks (or bins; see `len_freq$breaks`). We'll use this in the next step (below) to age each fish. Plotting length-frequency we see our data is skewed right. The red vertical line denotes the median (`r len_desc_stats$Med` cm FL).
+
+```{r plot-lf}
+
+plot(len_freq)
+
+```
+
+```{r make-alk, include=FALSE, eval=FALSE}
+
+# from narrative not used: create our age-length key. `sum(is.nan(alk))` checks
+# for empty bins and value should be 0 (i.e., no empty bins).
+
+alk <- MakeALKey(
+  data = trammel_catch,
+  len = FL,
+  age = Age,
+  lenBreaks = len_freq$breaks
+)
+
+sum(is.nan(alk))
+
+```
+
+### Age Distribution
+
+`AgeEach()` is modeled after `FSA::alkIndivAge()`. The stripped-down output (i.e., just the ages) of `AgeEach()` is better suited for `spopmodel`. (**Note** however more testing of `AgeEach()` is still required as of 15-Oct-2018.)
+
+```{r age-each}
+
+ages <- AgeEach(
+  data = trammel_catch,
+  len = FL,
+  age = Age,
+  lenBreaks = len_freq$breaks
+)
+
+```
+
+```{r compare-FSA, include=FALSE, eval=FALSE}
+
+# TODO: correct flaw in logic with AgeEach(); is not assign ages correctly
+#       a good check is to plot fl ~ age, should see increasing mean with age
+#       (J. DuBois 12-Oct-2018)
+
+# 15-Oct-2018: corrected flaw (I feel) using unsplit instead of unlist in
+# AgeEach(). Correction works and CheckAge() appears to age quite similarly to
+# FSA::alkIndivAge --- check with code below, though not identical due to use of
+# sample() --- would be wise to do more checking just to ensure proper
+# functioning of CheckAge()
+
+# fsa_indiv <- FSA::alkIndivAge(
+#   key = alk,
+#   formula = ~FL,
+#   data = trammel_catch,
+#   breaks = len_freq$breaks
+# )
+# 
+# plot(sort(fsa_indiv$age), y = sort(ages))
+# abline(a = 0, b = 1, col = 2)
+# 
+# table(fsa_indiv$age)-
+# table(ages)
+
+```
+
+Now we can simply call R's `table()` to generate age-frequency. We now have our age-frequency (for ages 3-19). (Sum of `age_freq` should equal 1000. You can double-check if you like.)
+
+```{r age-freq}
+
+age_freq <- table(ages[["Ages"]], dnn = NULL)
+
+age_freq
+
+```
+
+```{r mean-laa}
+
+# mean length at each age (3-19)
+mean_len_age <- aggregate(
+  trammel_catch[["FL"]],
+  by = list(Age = ages[["Ages"]]), 
+  FUN = mean
+)
+
+# something more descriptive than 'FL'
+colnames(mean_len_age)[2] <- "MeanFL"
+
+mean_len_age
+
+```
+
+Let's plot our raw length ~ age data, overlayed with mean-length-at-age (red '+' sign). It looks reasonable and as we expected.
+
+```{r plot-mean_laa}
+
+plot(jitter(ages[["Ages"]]), trammel_catch[["FL"]], col = "grey70", las = 1)
+points(mean_len_age, pch = "+", col = "darkred")
+
+```
+
+We now need an age distribution based on a starting population. We use `AgeDist()` passing our `age_freq` variable and keeping defaults `abund = 48000` and `fracFemale = 0.5`. The output (as shown below) is the basis for how data `age_dist` was created. (With `spopmodel` library loaded, view `age_dist` & compare to `age_distribution`.)
+
+```{r age-dist}
+
+age_distribution <- AgeDist(ageFreq = age_freq)
+
+age_distribution
+
+```
+
+Though we have our age-distribution, we still need values for ages 0-2. Per model development, age-1 & -2 values were obtained using linear regression (specifically log-linear).
+
+For convenience, we assign estimated age abundance (`EstAgeAbund`) to variable `est_abundance`. Estimated age abundance is simply age-frequency (as a proportion of total) multiplied by our starting abundance (in this case `r age_distribution$OverallAbund`). We assign our x & y values accordingly, use R's `lm()` for linear regression, and then plot the results. As we expect, frequency declines with age.
+
+```{r age1-2}
+
+est_abundance <- age_distribution[["EstAgeAbund"]]
+
+# variables for plotting & linear regression
+yval <- log(as.vector(est_abundance))
+xval <- as.numeric(names(est_abundance))
+
+mod <- lm(yval ~ xval)
+
+plot(
+  x = xval,
+  y = yval,
+  type = "b",
+  xlab = "Age",
+  ylab = "log(EstAbund)",
+  panel.first = abline(mod, col = "grey60", lty = 2),
+  # panel.first = grid(),
+  las = 1
+)
+
+```
+
+We use our linear model to predict ages 1 & 2. These values, however, include males & females. We need only females and will combine ages 1 & 2 with ages 3-19 (females only).
+
+```{r age1_2-pred}
+
+age1_2 <- exp(predict(object = mod, newdata = list(xval = c(1, 2))))
+
+females <- c(
+  age1_2 * age_distribution$FracFemale,
+  age_distribution$CountFemByAge
+)
+
+females
+
+```
+
+### Spawning Probability
+
+Later we will calculate age-0 distribution (frequency) and append `females` accordingly. To do so we need spawning probability, which we will create now.
+
+For our White Sturgeon population, we do not have age-specific spawning probabilities. Thus, we rely on our age & length data plus probability data from previous research.
+
+Running `SpawningProb()` will issue a warning saying "Using `SpawningProbWST` for `pMat`". `pMat` is short for probability of maturity and in lieu of our own dataset, we use data from Champman (1989), termed herein `SpawningProbWST`. These data can be found [here](https://github.com/jasondubois/spopmodel/blob/master/data-raw/spawning.csv).
+
+Internally, `SpawningProb()` performs `glm()` (as probability ~ length) using `SpawningProbWST`, and then from this model predicts probability given mean-length-at-age. The resulting `Prob` in `p_spawn` is the predicted probability multiplied by the argument supplied to `mature` (in this case default 0.15, or 15% of all females spawn annually). `Err` is probability multiplied by 0.20.
+
+*Note*: `glm()` inside `SpawningProb()` may issue the following warning:  non-integer #successes in a binomial glm! As of 24-Oct-2018, we are still looking into this.
+
+```{r prob-spawn}
+
+bool_mlaa_gt9 <- mean_len_age$Age > 9
+
+
+# using default argument for mature parameter (0.15)
+p_spawn <- with(data = mean_len_age[bool_mlaa_gt9, ], expr = {
+  SpawningProb(len = MeanFL, age = Age)
+})
+
+p_spawn
+
+```
+
+We've subsetted on fish "> age-9" because --- for White Sturgeon --- females mature beginning around age-10. So to complete our dataset (i.e., probability of spawning) we need to `rbind()` ages 0-9.
+
+We'll preserve `p_spawn` for future use and name our new dataframe `prob_spawn2` so we don't confuse with `prob_spawn` internal to `spopmodel`. In fact, it's not a bad idea to compare `prob_spawn` with `prob_spawn2`, as both datasets should be roughly the same.
+
+```{r prob-spawn_full}
+
+prob_spawn2 <- rbind(
+  data.frame(Age = 0:9, Prob = 0, Err = 0),
+  p_spawn[, c("Age", "Prob", "Err")]
+)
+
+prob_spawn2
+
+```
+
+### Age Distribution: age-0
+
+Now we return to age distribution. Estimating age-0 frequency is a bit more involved. We need first to calculate mean length at age, given our age and length data.
+
+Here we employ Devore's (et al. 1995) equation to calculate number of eggs based on fork length ($eggs=0.072 \times l_i^{2.94}$, where *l~i~* is mean length at age. Like maturity, we subset on fish > age-9.
+
+```{r devore}
+
+eggs_female <- 0.072 * (mean_len_age[bool_mlaa_gt9, "MeanFL"]^2.94)
+
+```
+
+Now that we have number of eggs per spawning female, we need to multiply this by the number of females and spawning probability.
+
+```{r age0-freq}
+
+age0 <- sum(p_spawn[["Prob"]] * females[10:19] * eggs_female)
+
+```
+
+We get a value of `r format(age0, big.mark = ",")` age0 fish. We will append this to our `females` variable. Our age distribution really should be a dataframe, so we can construct that now. We name this dataframe `age_dist2` so as not to confuse it with `age_dist` internal to `spopmodel`. (The two dataframes should be roughly the same, although you likely will find a big (and yet unexplained) difference between age-0 values.)
+
+```{r age_dist2}
+
+age_dist2 <- data.frame(
+  Age = as.numeric(c(0, names(females))),
+  Freq = c(age0, unname(females)),
+  row.names = NULL
+)
+
+age_dist2
+
+```
+
+### Egg Count
+
+We need age-specific egg count. Absent this, the process to generate such data is similar to the one that creates spawning probability. Here we use `EggCount()`, which runs linear regression on Devore (et al. 1995) [fecundity data](https://github.com/jasondubois/spopmodel/blob/master/data-raw/fecundity.csv) (here in named `FecundityWST`) and then predicts fecundity given mean-length-at-age. 
+
+Age, we `rbind()` ages-0 through -9 data as 0, given maturity begins around age-10. We assign this to variable `num_eggs` so as not to confused with `numbers_eggs` internal to `spopmodel`.
+
+*Note*: the use of linear regression is peculiar given Devore's egg count equation (above). We are following model protocol, but you may want to experiment by plugging mean-length-at-age directly into Devore's equation. 
+
+```{r num-eggs}
+
+# egg count age-10 to age-19
+egg_count <- with(data = mean_len_age[bool_mlaa_gt9, ], expr = {
+  EggCount(len = MeanFL, age = Age)
+})
+
+num_eggs <- rbind(
+  data.frame(Age = 0:9, Count = 0, Err = 0),
+  egg_count[, c("Age", "Count", "Err")]
+)
+
+num_eggs
+
+```
+
+### Survival Probability
+
+Here we create the final of four data inputs: survival probability. Because exploitation ($\mu$) affects overall survival, we need to derive survival probability for every level of $\mu$. We do this using `SurvivalProb()`.
+
+`SurvivalProb()` requires age-specific probability survival, along with some measure of error. Here we use data from `prob_survival` (see `help(prob_survival)`). For ages subject to harvest (i.e., legal-sized fish), `SurvivalProb()` adjusts survival rate --- i.e., in this case `max(prob_survival[1:4, "prob"])` --- given fishing mortality (*F*), as calculated below. *Note*: `max(prob_survival[1:4, "prob"])` (or `r max(prob_survival[1:4, "prob"])`) assumes no fishing mortality.
+
+$$F=\frac{\mu \times Z}{A}$$
+
+where
+$Z=-log(S)$, S is `estS` (see `help(prob_survival)`)  
+$\mu$, is `estMu` (see `help(prob_survival)`)  
+$A=1-S$
+
+**Note**: the derivation for standard error of fish affected by harvest is not well understood (by me - J. DuBois, that is) at this point. We simply multiply `sRateErr` by 0.45. This will suffice for now until we better understand the method used to derive this SE. I used 0.45 because the values in `prob_survival` are 0.04281 for non-harvestable fish &ge; age-3 and 0.01932 for legal-sized fish, 0.04281 * 0.45 is roughly 0.019.
+
+**Note**: we use values for ages 0-2 culled from literature. See S. Blackburn's Masters Thesis for references or `help(prob_survival)`.
+
+`SurvivalProb()` accepts a numeric vector as an argument for parameter `mu`. In fact, it's very likely you'll want to pass a vector with varying `mu`s for use in simulations. Here we create a very small vector (3 levels of `mu`) just for ease of demonstration. In reality, this model was developed on `mu` 0 to 0.30, by 0.01. For multiple `mu`s, `SurvivalProb()` will return a named list using "mu_" followed by the level of `mu`.
+
+```{r prob-surv}
+
+mus <- c(0.01, 0.02, 0.03)
+
+prob_survival2 <- SurvivalProb(
+  ages = prob_survival[["age"]],
+  sRate = prob_survival[1:4, "prob"],
+  sRateErr = prob_survival[1:4, "se"],
+  mu = mus,
+  agesMu = 10:15
+)
+
+str(prob_survival2)
+
+```
+
+Below is a snippet of dataframe `mu_0.01` to show ages not affected by harvest (7-9) and those affected by harvest (10-12).
+
+*Note*: Per model design (and mostly due to data gaps) we use (1) constant survival rate for ages 3-19, less of course fishing mortality and (2) constant standard error throughout, irrespective of mu. It might be an interesting exercise to vary age-specific survival, perhaps at least for older fish.
+
+```{r prob-surv_display}
+
+# just a snippet for display
+prob_survival2$mu_0.01[8:13, ]
+
+```
+
+## References
+
+LEFT OFF HERE 24-Oct-2018

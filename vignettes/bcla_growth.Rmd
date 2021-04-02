@@ -1,0 +1,199 @@
+---
+title: "Growth & Back-calculated Length-at-Age"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Growth & Back-calculated Length-at-Age}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(
+  collapse = TRUE, error = FALSE,
+  comment = "#>"
+)
+
+```
+
+## Background
+
+
+
+## View Data
+
+We begin by loading `spopmodel` to our current session. We assume said package is already installed accordingly.
+
+```{r libraries}
+
+library(spopmodel)
+
+```
+
+For this demonstration, we will use dataset `fin_ray_aging`. We display the first 5 rows below. Each row represents a single fish from which a pectoral finray was sampled and then analyzed (i.e., aged). Field `lencap` is fish length at time of capture (length at capture), and field `radcap` is (finray) sample radius at time of capture (radius at capture). Fields `anu<1-10>` are radius at age, starting at age 1.
+
+`fin_ray_aging` has `r nrow(fin_ray_aging)` rows. Data are from White Sturgeon captured in the San Francisco Estuary in 2014.
+
+```{r view-data, results='asis'}
+
+knitr::kable(head(fin_ray_aging, n = 5))
+
+```
+
+## Dahl-Lea Back-calculation
+
+Here we employ the Dahl-Lea method to back-calculate length-at-age. We do this to understand growth, as we will later fit to our data a von Bertalanffy growth model.
+
+The Dahl-Lea method uses all data variables to estimate each fish's length at a given age. The algorithm is simply $l_a=anu_a \times \frac{lencap}{radcap}$, where *l~a~* = length-at-age and *anu~a~* is radius-at-age. We use `BackCalcLength()` to apply this algorithm to our data.
+
+`lCap` & `rCap` are simply the field names in `fin_ray_aging` that contain length-at-capture & radius-at-capture data. For the `rAtAge` parameter it's easiest to supply the column numbers containing radius-at-age data. In our example, this use `2:11`. Because we know we're using White Sturgeon data, we'll assign `BackCalcLength()` output to `wst_bcla`.
+
+```{r bcla}
+
+wst_bcla <- BackCalcLength(
+  data = fin_ray_aging,
+  lCap = lencap,
+  rCap = radcap,
+  rAtAge = 2:11
+)
+
+```
+
+`wst_bcla` has `r nrow(wst_bcla)` observations and `r ncol(wst_bcla)` variables (`r paste0(colnames(wst_bcla), collapse = ", ")`). Below we display the first 5 rows.
+
+```{r view-bcla, results='asis'}
+
+knitr::kable(head(wst_bcla, n = 5))
+
+```
+
+## Plotting
+
+Let's plot our data. We'll use base R graphics, and before we plot any data we'll want to capture the default graphical parameters in `par()`. This is helpful for resetting defaults, which we show at the end of this document.
+
+```{r default-params}
+
+# capture default setting & then change desired features accordingly
+opar <- par()
+
+```
+
+We want to visualize length ~ age (y ~ x). We add some jitter to our x-variable to reduce over-plotting. We observe what we expected: mean length (cm) increases with age.
+
+```{r plot-data, fig.asp=0.75}
+
+# mostly changing default colors but margins too
+par(
+  mar = c(5, 4, 1.7, 2) + 0.1,
+  bg = "white",
+  col.axis = "grey20",
+  fg = "grey80"
+)
+
+# jitter x-variable to reduce over-plotting
+plot(
+  x = jitter(wst_bcla[["age"]]),
+  y = wst_bcla[["len"]],
+  col = "steelblue",
+  xlab = "Age",
+  ylab = "Length (cm)",
+  las = 1,
+  panel.first = grid(col = "grey90", lty = 1, lwd = 0.05)
+)
+
+```
+
+## Fitting Growth Model
+
+Now let's fit to our data (`wst_bcla`) a von Bertalanffy growth model (VBGM). We use `FitVBGM()`. This function uses R's `stats::nls()` and thus requires some starting estimates for model parameters. Obtain values from literature, previous research, or create a [`selfStart()`](https://www.rdocumentation.org/packages/stats/versions/3.5.1/topics/selfStart) function. For a VBGM, we need *Linf* (asymptotic max length), *K* (growth rate; rate of increase in length), and *t~0~* (some hypothetical age at length = 0).
+
+**Note**: Ideally, for model fit and model testing, you'd split your data into test and training sets. You can do this using `caTools::sample.split()`, but for this demonstration, we'll fit the model to our entire dataset.
+
+```{r fit}
+
+start_vals <- list(Linf = 100, K = 0.04, t0 = 2)
+
+vbgm <- FitVBGM(data = wst_bcla, len = len, age = age, start = start_vals)
+
+```
+
+## Predicting (from) Model Fit
+
+For now, the output of `FitVBGM()` is simply `stats::nls()` output. So, we can use `summary()` on our `vbgm` object. Plus, `vbgm` is a list with `r length(vbgm)` elements (see `nls` R documentation for output values).
+
+```{r summ-vbgm}
+
+summary(vbgm)
+
+```
+
+It is important --- for any model fit --- to view the residuals (i.e., observed - fitted). Given our object `vbgm`, we can get residuals easily with `vbgm$m$resid()`. We don't see any pattern in our residuals, and this is good.
+
+```{r resids}
+
+resids <- vbgm$m$resid()
+
+plot(resids, panel.first = abline(h = 0, col = "grey70"))
+
+```
+
+We can calculate a few statistics with our residuals, too. Residual sum of squares (RSS), Residual Standard Error (RSE, provided in summary above), and Mean Squared Error (MSE) are such stats. 
+
+```{r stats}
+
+RSS <- sum(resids^2)
+# we subtract 3 because our model has 3 parameters
+RSE <- sqrt(RSS / (length(resids) - 3))
+MSE <- mean(resids^2)
+
+```
+
+```{r stats-formatted, echo=FALSE}
+
+# for formatting in narrative
+RSS <- format(RSS, digits = 7, scientific = FALSE)
+RSE <- format(RSE, digits = 3)
+MSE <- format(MSE, digits = 4)
+
+```
+
+Our model's RSS is `r RSS`, RSE is `r RSE` (see summary output too), and MSE is `r MSE`. Small RSE and MSE values are desired.
+
+We have a few ways to add our model curve to our plot. We will use R's `predict()` function. We need to supply this function with "newdata" and will use ages 1-10.
+
+<!--
+LEFT OFF HERE (10/10/18) need to improve size and appearance of figures.
+https://www.rstudio.com/wp-content/uploads/2015/03/rmarkdown-reference.pdf
+https://sebastiansauer.github.io/figure_sizing_knitr/
+-->
+
+```{r plot-curve, fig.width=8, out.height="100px"}
+
+len_predict <- predict(object = vbgm, newdata = list(age = 1:10))
+
+# jitter x-variable to reduce over-plotting
+plot(
+  x = jitter(wst_bcla[["age"]]),
+  y = wst_bcla[["len"]],
+  col = "steelblue",
+  xlab = "Age",
+  ylab = "Length (cm)",
+  las = 1,
+  panel.first = grid(col = "grey90", lty = 1, lwd = 0.05),
+  panel.last = lines(x = 1:10, y = len_predict, col = "darkorange", lty = 2)
+)
+
+```
+
+```{r}
+
+# # reset to default settings
+par(
+  mar = opar$mar,
+  bg = opar$bg,
+  col.axis = opar$col.axis,
+  fg = opar$fg
+)
+
+```
+
